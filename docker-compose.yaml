@@ -8,12 +8,10 @@ services:
     hostname: rabbitmq
     ports:
       - "5672:5672"      # AMQP protocol port
-      - "5552:5552"
       - "15672:15672"    # Management dashboard port
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
-      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbitmq_stream advertised_host localhost"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - rabbitmq_logs:/var/log/rabbitmq
@@ -23,8 +21,7 @@ services:
       timeout: 10s
       retries: 5
     restart: unless-stopped
-    command: >
-      sh -c "rabbitmq-plugins enable rabbitmq_stream rabbitmq_stream_management && rabbitmq-server"
+    command: rabbitmq-server
 
   # RustFS Service (S3 compatible storage)
   rustfs:
