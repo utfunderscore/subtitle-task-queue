@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # Redis Service
+  rabbitmq:
+    image: rabbitmq:4.2
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"      # AMQP protocol port
+      - "5552:5552"
+      - "15672:15672"    # Management dashboard port
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbitmq_stream advertised_host localhost"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_logs:/var/log/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    command: >
+      sh -c "rabbitmq-plugins enable rabbitmq_stream rabbitmq_stream_management && rabbitmq-server"
+
+  # RustFS Service (S3 compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs-container
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # API port
+      - "9001:9001" # Console port (Web UI)
+    environment:
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_EXTERNAL_ADDRESS=:9000
+      - RUSTFS_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/health" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  rustfs_data:
+  rabbitmq_data:
+  rabbitmq_logs:
