@@ -1,7 +1,8 @@
+use anyhow::{Context, Result};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 pub trait SubtitleInference {
-    fn execute(&self, sample: Vec<i16>) -> Vec<Segment>;
+    fn execute(&self, sample: &Vec<i16>) -> Result<Vec<Segment>>;
 }
 
 pub struct Segment {
@@ -38,27 +39,30 @@ impl WhisperModel<'_> {
 }
 
 impl<'b> SubtitleInference for WhisperModel<'b> {
-    fn execute(&self, sample: Vec<i16>) -> Vec<Segment> {
+    fn execute(&self, sample: &Vec<i16>) -> Result<Vec<Segment>> {
         let mut state = self
             .whisper_context
             .create_state()
-            .expect("failed to create state");
+            .context("Failed to create Whisper state")?;
 
-        let mut inter_samples = vec![Default::default(); sample.len()];
+        let mut samples = vec![Default::default(); sample.len()];
 
-        whisper_rs::convert_integer_to_float_audio(&sample, &mut inter_samples)
-            .expect("failed to convert audio data");
-        let samples = whisper_rs::convert_stereo_to_mono_audio(&inter_samples)
-            .expect("failed to convert audio data");
+        whisper_rs::convert_integer_to_float_audio(sample, &mut samples)
+            .context("Failed to convert integer audio samples to float")?;
+        
+        // Note: Audio is already converted to mono in convert_to_wav(), 
+        // so no stereo-to-mono conversion is needed here
 
         state
             .full(self.params.clone(), &samples[..])
-            .expect("failed to run model");
+            .context("Failed to run Whisper inference model")?;
 
-        state.as_iter().map(|segment| Segment {
+        let segments = state.as_iter().map(|segment| Segment {
             text: segment.to_string(),
             start_timestamp: segment.start_timestamp(),
             end_timestamp: segment.end_timestamp(),
-        }).collect()
+        }).collect();
+
+        Ok(segments)
     }
 }

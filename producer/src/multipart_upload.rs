@@ -10,13 +10,12 @@ const CHUNK_SIZE: u64 = 1024 * 1024 * 5;
 const MAX_CHUNKS: u64 = 10000;
 const BUCKET: &str = "test";
 
-pub async fn upload(client: Client, path: &str) -> Result<()> {
-    let key = Uuid::new_v4().to_string();
+pub async fn upload(client: Client, task_id: &Uuid, path: &str) -> Result<()> {
 
     let multipart_upload_res: CreateMultipartUploadOutput = client
         .create_multipart_upload()
         .bucket(BUCKET)
-        .key(&key)
+        .key(task_id.to_string())
         .send()
         .await
         .context("Failed to create multipart upload")?;
@@ -69,7 +68,7 @@ pub async fn upload(client: Client, path: &str) -> Result<()> {
         let part_number = (chunk_index as i32) + 1;
         let upload_part_res = client
             .upload_part()
-            .key(&key)
+            .key(&task_id.to_string())
             .bucket(BUCKET)
             .upload_id(upload_id)
             .body(stream)
@@ -93,7 +92,7 @@ pub async fn upload(client: Client, path: &str) -> Result<()> {
     let _complete_multipart_upload_res = client
         .complete_multipart_upload()
         .bucket(BUCKET)
-        .key(&key)
+        .key(task_id.to_string())
         .multipart_upload(completed_multipart_upload)
         .upload_id(upload_id)
         .send()

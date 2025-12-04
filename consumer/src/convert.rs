@@ -11,6 +11,28 @@ pub enum ConvertError {
     WavReadError(hound::Error),
 }
 
+impl std::fmt::Display for ConvertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConvertError::IoError(e) => write!(f, "I/O error during audio conversion: {}", e),
+            ConvertError::FfmpegError(msg) => write!(f, "FFmpeg error: {}", msg),
+            ConvertError::NoAudioStream => write!(f, "No audio stream found in input file"),
+            ConvertError::InvalidInput => write!(f, "Invalid input file or file does not exist"),
+            ConvertError::WavReadError(e) => write!(f, "Error reading WAV file: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for ConvertError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConvertError::IoError(e) => Some(e),
+            ConvertError::WavReadError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 impl From<std::io::Error> for ConvertError {
     fn from(err: std::io::Error) -> Self {
         ConvertError::IoError(err)

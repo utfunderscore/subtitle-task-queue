@@ -47,8 +47,11 @@ struct AppError {
 }
 
 impl AppError {
-    
-    fn with_details(status: StatusCode, message: impl Into<String>, details: impl Into<String>) -> Self {
+    fn with_details(
+        status: StatusCode,
+        message: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
         Self {
             status,
             message: message.into(),
@@ -130,43 +133,40 @@ async fn accept_form(
     let task_id = Uuid::new_v4();
 
     let path = format!("temp/{}", task_id.to_string());
-    let mut writer = BufWriter::new(
-        File::create(path.clone())
-            .await
-            .map_err(|e| AppError::with_details(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create temporary file",
-                e.to_string()
-            ))?,
-    );
+    let mut writer = BufWriter::new(File::create(path.clone()).await.map_err(|e| {
+        AppError::with_details(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create temporary file",
+            e.to_string(),
+        )
+    })?);
 
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::with_details(
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+        AppError::with_details(
             StatusCode::BAD_REQUEST,
             "Failed to read multipart field",
-            e.to_string()
-        ))? 
-    {
+            e.to_string(),
+        )
+    })? {
         loop {
             match field.chunk().await {
                 Ok(Some(chunk)) => {
-                    writer
-                        .write(&chunk.to_vec())
-                        .await
-                        .map_err(|e| AppError::with_details(
+                    writer.write(&chunk.to_vec()).await.map_err(|e| {
+                        AppError::with_details(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "Failed to write file chunk",
-                            e.to_string()
-                        ))?;
+                            e.to_string(),
+                        )
+                    })?;
                 }
                 Ok(None) => {
-                    writer.flush().await.map_err(|e| AppError::with_details(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to flush file buffer",
-                        e.to_string()
-                    ))?;
+                    writer.flush().await.map_err(|e| {
+                        AppError::with_details(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to flush file buffer",
+                            e.to_string(),
+                        )
+                    })?;
                     break;
                 }
                 Err(e) => {
@@ -176,7 +176,7 @@ async fn accept_form(
                     return Err(AppError::with_details(
                         StatusCode::BAD_REQUEST,
                         "Failed to read file chunk",
-                        e.to_string()
+                        e.to_string(),
                     ));
                 }
             }
@@ -185,23 +185,25 @@ async fn accept_form(
     drop(writer);
 
     info!("File upload complete, transferring to s3");
-    if let Err(err) = upload(client.0, &path).await {
+    if let Err(err) = upload(client.0, &task_id, &path).await {
         fs::remove_file(&path).await.ok();
         return Err(AppError::internal_error(err));
     }
-    
+
     info!("S3 Transfer complete for {}", task_id);
-    fs::remove_file(&path).await.map_err(|e| AppError::with_details(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Failed to remove temporary file",
-        e.to_string()
-    ))?;
-    
+    fs::remove_file(&path).await.map_err(|e| {
+        AppError::with_details(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to remove temporary file",
+            e.to_string(),
+        )
+    })?;
+
     info!("Removed local file... adding to work queue");
     publish_task(connection.0, task_id)
         .await
-        .map_err(|e| AppError::internal_error(e))?;
-    
+        .map_err(AppError::internal_error)?;
+
     info!("Task published successfully");
 
     Ok(Json(SuccessResponse {
@@ -214,7 +216,8 @@ async fn publish_task(connection: Connection, item_id: Uuid) -> Result<()> {
     let args = BasicPublishArguments::new("", QUEUE_NAME);
 
     // Open a channel
-    let channel = connection.open_channel(None)
+    let channel = connection
+        .open_channel(None)
         .await
         .context("Failed to open RabbitMQ channel")?;
 
@@ -242,18 +245,19 @@ async fn publish_task(connection: Connection, item_id: Uuid) -> Result<()> {
 }
 
 fn create_s3_client() -> Client {
-
-    Client::from_conf(Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .credentials_provider(Credentials::new(
-            "rustfsadmin",
-            "rustfsadmin",
-            None,
-            None,
-            "my-provider",
-        ))
-        .region(Region::new("us-east-1"))
-        .endpoint_url("http://localhost:9000")
-        .force_path_style(true)
-        .build())
+    Client::from_conf(
+        Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .credentials_provider(Credentials::new(
+                "rustfsadmin",
+                "rustfsadmin",
+                None,
+                None,
+                "my-provider",
+            ))
+            .region(Region::new("us-east-1"))
+            .endpoint_url("http://localhost:9000")
+            .force_path_style(true)
+            .build(),
+    )
 }
