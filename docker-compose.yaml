@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Redis Service
+  # RabbitMQ Service
   rabbitmq:
     image: rabbitmq:4.2
     container_name: rabbitmq
@@ -45,7 +45,28 @@ services:
       timeout: 20s
       retries: 3
 
+  # Postgres Service
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      # Change these values or move them to an .env file for production
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: app_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h localhost" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   rustfs_data:
   rabbitmq_data:
   rabbitmq_logs:
+  postgres_data:
