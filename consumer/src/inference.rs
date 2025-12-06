@@ -1,14 +1,9 @@
 use anyhow::{Context, Result};
+use common::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 pub trait SubtitleInference {
     fn execute(&self, sample: &Vec<i16>) -> Result<Vec<Segment>>;
-}
-
-pub struct Segment {
-    text: String,
-    start_timestamp: i64,
-    end_timestamp: i64,
 }
 
 pub struct WhisperModel<'a> {
@@ -49,19 +44,24 @@ impl<'b> SubtitleInference for WhisperModel<'b> {
 
         whisper_rs::convert_integer_to_float_audio(sample, &mut samples)
             .context("Failed to convert integer audio samples to float")?;
-        
-        // Note: Audio is already converted to mono in convert_to_wav(), 
+
+        // Note: Audio is already converted to mono in convert_to_wav(),
         // so no stereo-to-mono conversion is needed here
 
         state
             .full(self.params.clone(), &samples[..])
             .context("Failed to run Whisper inference model")?;
 
-        let segments = state.as_iter().map(|segment| Segment {
-            text: segment.to_string(),
-            start_timestamp: segment.start_timestamp(),
-            end_timestamp: segment.end_timestamp(),
-        }).collect();
+        let segments = state
+            .as_iter()
+            .map(|segment| {
+                Segment::new(
+                    segment.to_string(),
+                    segment.start_timestamp(),
+                    segment.end_timestamp(),
+                )
+            })
+            .collect();
 
         Ok(segments)
     }

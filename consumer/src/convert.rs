@@ -1,52 +1,10 @@
+use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
-#[derive(Debug)]
-pub enum ConvertError {
-    IoError(std::io::Error),
-    FfmpegError(String),
-    NoAudioStream,
-    InvalidInput,
-    WavReadError(hound::Error),
-}
-
-impl std::fmt::Display for ConvertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConvertError::IoError(e) => write!(f, "I/O error during audio conversion: {}", e),
-            ConvertError::FfmpegError(msg) => write!(f, "FFmpeg error: {}", msg),
-            ConvertError::NoAudioStream => write!(f, "No audio stream found in input file"),
-            ConvertError::InvalidInput => write!(f, "Invalid input file or file does not exist"),
-            ConvertError::WavReadError(e) => write!(f, "Error reading WAV file: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for ConvertError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            ConvertError::IoError(e) => Some(e),
-            ConvertError::WavReadError(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<std::io::Error> for ConvertError {
-    fn from(err: std::io::Error) -> Self {
-        ConvertError::IoError(err)
-    }
-}
-
-impl From<hound::Error> for ConvertError {
-    fn from(err: hound::Error) -> Self {
-        ConvertError::WavReadError(err)
-    }
-}
-
 /// Checks if a file has an audio stream using ffprobe
-fn has_audio_stream<P: AsRef<Path>>(input_path: P) -> Result<bool, ConvertError> {
+fn has_audio_stream<P: AsRef<Path>>(input_path: P) -> Result<bool> {
     let output = Command::new("ffprobe")
         .arg("-v")
         .arg("error")
@@ -57,11 +15,13 @@ fn has_audio_stream<P: AsRef<Path>>(input_path: P) -> Result<bool, ConvertError>
         .arg("-of")
         .arg("default=noprint_wrappers=1:nokey=1")
         .arg(input_path.as_ref().as_os_str())
-        .output()?;
+        .output()
+        .context("Failed to execute ffprobe command")?;
 
     if !output.status.success() {
-        return Err(ConvertError::FfmpegError(
-            String::from_utf8_lossy(&output.stderr).to_string(),
+        return Err(anyhow!(
+            "FFmpeg error: {}",
+            String::from_utf8_lossy(&output.stderr)
         ));
     }
 
@@ -76,25 +36,25 @@ fn has_audio_stream<P: AsRef<Path>>(input_path: P) -> Result<bool, ConvertError>
 /// 
 /// # Returns
 /// * `Ok(Vec<i16>)` - Vector of 16-bit audio samples (mono, 16kHz)
-/// * `Err(ConvertError)` - Error if conversion fails
+/// * `Err(anyhow::Error)` - Error if conversion fails
 /// 
 /// # Notes
 /// Uses a temporary directory for the intermediate WAV file, which is automatically cleaned up
-pub fn convert_to_wav<P: AsRef<Path>>(input_path: P) -> Result<Vec<i16>, ConvertError> {
+pub fn convert_to_wav<P: AsRef<Path>>(input_path: P) -> Result<Vec<i16>> {
     let input = input_path.as_ref();
     
     // Check if input file exists
     if !input.exists() {
-        return Err(ConvertError::InvalidInput);
+        return Err(anyhow!("Invalid input file or file does not exist"));
     }
 
     // Check if file has audio stream
     if !has_audio_stream(input)? {
-        return Err(ConvertError::NoAudioStream);
+        return Err(anyhow!("No audio stream found in input file"));
     }
 
     // Create temporary directory (automatically cleaned up when dropped)
-    let temp_dir = TempDir::new()?;
+    let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
     let output = temp_dir.path().join("output.wav");
 
     // Run ffmpeg conversion to WAV (16-bit PCM, mono, 16kHz for whisper compatibility)
@@ -110,19 +70,19 @@ pub fn convert_to_wav<P: AsRef<Path>>(input_path: P) -> Result<Vec<i16>, Convert
         .arg("16000") // 16kHz sample rate (optimal for whisper)
         .arg("-y") // Overwrite output file
         .arg(output.as_os_str())
-        .status()?;
+        .status()
+        .context("Failed to execute ffmpeg command")?;
 
     if !status.success() {
-        return Err(ConvertError::FfmpegError(format!(
-            "ffmpeg exited with status: {}",
-            status
-        )));
+        return Err(anyhow!("ffmpeg exited with status: {}", status));
     }
 
     // Read the WAV file and extract samples
-    let samples: Vec<i16> = hound::WavReader::open(&output)?
+    let samples: Vec<i16> = hound::WavReader::open(&output)
+        .context("Failed to open WAV file")?
         .into_samples::<i16>()
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .context("Failed to read audio samples from WAV file")?;
 
     // temp_dir is automatically dropped here, cleaning up the WAV file
     Ok(samples)

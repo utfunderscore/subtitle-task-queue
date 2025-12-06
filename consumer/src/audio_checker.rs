@@ -1,4 +1,4 @@
-use std::error::Error;
+use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
 
@@ -8,7 +8,7 @@ pub fn is_ffmpeg_available() -> bool {
 }
 
 /// Quick check if a file is supported by FFmpeg (without checking for audio streams)
-pub async fn is_ffmpeg_compatible<P: AsRef<Path>>(file_path: P) -> Result<bool, Box<dyn Error>> {
+pub async fn is_ffmpeg_compatible<P: AsRef<Path>>(file_path: P) -> Result<bool> {
     let path = file_path.as_ref();
 
     if !path.exists() {
@@ -34,7 +34,7 @@ pub async fn is_ffmpeg_compatible<P: AsRef<Path>>(file_path: P) -> Result<bool, 
             .unwrap_or(false)
     })
     .await
-    .map_err(|x| x.into())
+    .map_err(|e| e.into())
 }
 #[cfg(test)]
 mod tests {
