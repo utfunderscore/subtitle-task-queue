@@ -1,0 +1,12 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.42"
+diesel = { version = "2.2.0", features = ["postgres", "chrono", "r2d2"] }
+r2d2 = "0.8.10"
+tokio = { version = "1.48.0", features = ["rt"] }
+common = { path = "../common"}
+anyhow = "1.0"
