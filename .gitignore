@@ -1,0 +1,80 @@
+# Rust package artifacts
+/target/
+**/*.rs.bk
+
+# Cargo config files
+Cargo.lock
+.cargo/config.toml
+.cargo/credentials
+
+# Coverage and reporting
+**/coverage/
+**/kcov-*
+**/tarpaulin-report.html
+**/tarpaulin-report.xml
+
+# Profiling/benchmarking
+/flamegraph.svg
+
+# Build output
+/build/
+*.dSYM
+*.rlib
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# By-products of cargo commands
+**/*.log
+**/*.crate
+
+# Editor and IDE settings
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# IntelliJ / CLion / RustRover
+.idea/
+*.iml
+out/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Emacs
+*~ 
+# Auto-save files
+.#*
+# Backup files
+*.bak
+
+# Vim
+.*.swp
+.*.swo
+*~
+# Undo history
+*.un~
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Misc
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Optional: ignore crates.io index (if using sparse registry on CI)
+/.crates/
+
+# Optional: ignore environment variable files (.env)
+/.env
+.env.*
+
+# End of file
