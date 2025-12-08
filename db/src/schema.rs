@@ -14,6 +14,9 @@ diesel::table! {
     task (id) {
         id -> Int4,
         created_at -> Timestamptz,
+        #[max_length = 20]
+        stage -> Varchar,
+        context -> Text,
     }
 }
 

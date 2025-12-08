@@ -4,18 +4,20 @@ use crate::inference::SubtitleInference;
 use amqprs::channel::{BasicAckArguments, BasicNackArguments, Channel};
 use amqprs::consumer::AsyncConsumer;
 use amqprs::{BasicProperties, Deliver};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
+use common::{Segment, TaskStage};
+use db::TaskStore;
 use std::fs;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use uuid::Uuid;
 
 pub struct AudioConsumer {
     client: Client,
     inference: Arc<Box<dyn SubtitleInference + Send + Sync>>,
     bucket: String,
+    task_store: TaskStore,
 }
 
 #[async_trait]
@@ -47,7 +49,7 @@ impl AsyncConsumer for AudioConsumer {
                 eprintln!("Backtrace:\n{}", e.backtrace());
 
                 if let Err(nack_err) = channel
-                    .basic_nack(BasicNackArguments::new(delivery_tag, false, true))
+                    .basic_nack(BasicNackArguments::new(delivery_tag, false, false))
                     .await
                 {
                     eprintln!("Failed to NACK message: {:#}", nack_err);
@@ -62,20 +64,34 @@ impl AudioConsumer {
         client: Client,
         bucket: String,
         inference: Box<dyn SubtitleInference + Send + Sync>,
+        task_store: TaskStore,
     ) -> Result<Self> {
         fs::create_dir_all("temp").context("Failed to create temp directory")?;
         Ok(Self {
             client,
             inference: Arc::new(inference),
             bucket,
+            task_store,
         })
     }
 
-    pub async fn process_task(&self, content: Vec<u8>) -> Result<()> {
-        let task_id =
-            Uuid::from_slice(&content).context("Failed to parse task ID from message content")?;
+    pub async fn process_task(&mut self, content: Vec<u8>) -> Result<()> {
+        let task_id: i32 = i32::from_le_bytes(
+            content
+                .try_into()
+                .map_err(|x: Vec<u8>| anyhow::anyhow!("Byte vector has wrong length: {}", x.len()))
+                .context("Failed to convert Vec<u8> to [u8; 4]")?,
+        );
 
         println!("Processing task: {}", task_id);
+
+        Self::update_stage(
+            &mut self.task_store,
+            task_id,
+            TaskStage::Processing,
+            "Processing audio",
+        )
+        .await;
 
         let resp = self
             .client
@@ -115,23 +131,52 @@ impl AudioConsumer {
 
         // Process the task and ensure cleanup happens regardless of success or failure
         let result = self.process_downloaded_file(&file_path, task_id).await;
+        let segments = match result {
+            Err(x) => {
+                Self::update_stage(
+                    &mut self.task_store,
+                    task_id,
+                    TaskStage::Failed,
+                    &x.to_string(),
+                )
+                .await;
+                return Err(x);
+            }
+            Ok(segments) => segments,
+        };
+
+        self.task_store.store_segments(task_id, segments).await?;
 
         // // Clean up the temporary file after processing (success or failure)
         // if let Err(e) = tokio::fs::remove_file(&file_path).await {
         //     eprintln!("Warning: Failed to clean up temporary file '{}': {}", file_path, e);
         // }
 
-        result
+        Self::update_stage(&mut self.task_store, task_id, TaskStage::Success, "Success").await;
+
+        Ok(())
     }
 
-    async fn process_downloaded_file(&self, file_path: &str, task_id: Uuid) -> Result<()> {
+    async fn store_segments(&self, segments: Vec<Segment>) -> Result<()> {
+        todo!()
+    }
+
+    async fn update_stage(db: &mut TaskStore, task_id: i32, task_stage: TaskStage, context: &str) {
+        if let Err(x) = db
+            .set_task_stage(task_id, task_stage, String::from(context))
+            .await
+        {
+            println!("Failed to update task stage: {}", x);
+        }
+    }
+
+    async fn process_downloaded_file(&self, file_path: &str, task_id: i32) -> Result<Vec<Segment>> {
         let is_compatible = is_ffmpeg_compatible(file_path)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to check if file is ffmpeg compatible: {}", e))?;
 
         if !is_compatible {
-            println!("File is not ffmpeg compatible");
-            return Ok(());
+            return Err(anyhow!("File is not ffmpeg compatible"));
         }
 
         let output = convert_to_wav(file_path)?;
@@ -151,6 +196,6 @@ impl AudioConsumer {
             segments.len()
         );
 
-        Ok(())
+        Ok(segments)
     }
 }

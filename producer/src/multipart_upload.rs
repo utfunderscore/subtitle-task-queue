@@ -4,13 +4,12 @@ use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 use aws_sdk_s3::primitives::{ByteStream, Length};
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use uuid::Uuid;
 
 const CHUNK_SIZE: u64 = 1024 * 1024 * 5;
 const MAX_CHUNKS: u64 = 10000;
 const BUCKET: &str = "test";
 
-pub async fn upload(client: Client, task_id: &Uuid, path: &str) -> Result<()> {
+pub async fn upload(client: Client, task_id: i32, path: &str) -> Result<()> {
 
     let multipart_upload_res: CreateMultipartUploadOutput = client
         .create_multipart_upload()

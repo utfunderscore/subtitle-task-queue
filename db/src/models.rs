@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use common::Segment;
 use diesel::prelude::*;
 
@@ -12,11 +13,13 @@ pub struct Task {
 #[diesel(table_name = crate::schema::task)]
 pub struct NewTask {
     created_at: chrono::DateTime<chrono::Utc>,
+    stage: String,
+    context: String,
 }
 
 impl NewTask {
-    pub fn new(created_at: chrono::DateTime<chrono::Utc>) -> Self {
-        Self { created_at }
+    pub fn new(created_at: chrono::DateTime<chrono::Utc>, stage: String, context: String) -> Self {
+        Self { created_at, stage, context }
     }
 }
 

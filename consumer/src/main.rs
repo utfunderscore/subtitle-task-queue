@@ -1,7 +1,7 @@
+mod audio_checker;
 mod convert;
 mod inference;
 mod task_consumer;
-mod audio_checker;
 
 use crate::inference::WhisperModel;
 use crate::task_consumer::AudioConsumer;
@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::{Client, Config};
+use db::TaskStore;
 use whisper_rs::{WhisperContext, WhisperContextParameters};
 
 #[tokio::main]
@@ -22,7 +23,9 @@ async fn main() -> Result<()> {
         "ggml-large-v3-turbo.bin",
         WhisperContextParameters::default(),
     )
-    .context("Failed to initialize Whisper context with model file 'ggml-large-v3-turbo-q5_0.bin'")?;
+    .context(
+        "Failed to initialize Whisper context with model file 'ggml-large-v3-turbo-q5_0.bin'",
+    )?;
 
     let client = create_s3_client();
 
@@ -35,10 +38,13 @@ async fn main() -> Result<()> {
     .await
     .context("Failed to connect to RabbitMQ at localhost:5672")?;
 
+    let task_store = TaskStore::new("postgres://admin:admin@localhost/subtitles")?;
+
     let _channel = register_task_consumer(
         &connection,
         client,
         String::from("test"),
+        task_store,
         "subtitles-work-queue",
         ctx,
     )
@@ -52,7 +58,7 @@ async fn main() -> Result<()> {
         .context("Failed to listen for Ctrl+C signal")?;
 
     println!("Shutting down...");
-    
+
     connection
         .close()
         .await
@@ -84,6 +90,7 @@ async fn register_task_consumer(
     connection: &Connection,
     client: Client,
     bucket: String,
+    task_store: TaskStore,
     queue_name: &str,
     whisper_context: WhisperContext,
 ) -> Result<amqprs::channel::Channel> {
@@ -96,7 +103,7 @@ async fn register_task_consumer(
         .open_channel(None)
         .await
         .context("Failed to open AMQP channel")?;
-    
+
     channel
         .register_callback(DefaultChannelCallback)
         .await
@@ -111,7 +118,7 @@ async fn register_task_consumer(
         .queue_declare(args)
         .await
         .context(format!("Failed to declare queue '{}'", queue_name))?;
-    
+
     channel
         .basic_qos(BasicQosArguments::new(0, 1, false))
         .await
@@ -123,12 +130,15 @@ async fn register_task_consumer(
 
     channel
         .basic_consume(
-            AudioConsumer::new(client, bucket, Box::new(WhisperModel::new(whisper_context)))
+            AudioConsumer::new(client, bucket, Box::new(WhisperModel::new(whisper_context)), task_store)
                 .context("Failed to create AudioConsumer")?,
             args,
         )
         .await
-        .context(format!("Failed to start consuming from queue '{}'", queue_name))?;
-    
+        .context(format!(
+            "Failed to start consuming from queue '{}'",
+            queue_name
+        ))?;
+
     Ok(channel)
 }

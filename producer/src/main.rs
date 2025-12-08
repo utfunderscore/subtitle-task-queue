@@ -11,19 +11,20 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Extension, Json, Router, debug_handler};
+use common::TaskStage;
+use db::TaskStore;
 use serde::Serialize;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tracing::info;
+use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
 pub mod multipart_upload;
-pub mod task_producer;
 
 const QUEUE_NAME: &str = "subtitles-work-queue";
 
@@ -82,6 +83,7 @@ impl IntoResponse for AppError {
 pub async fn main() -> Result<()> {
     let s3_client: Client = create_s3_client();
     let connection = create_rabbitmq_connection().await?;
+    let task_store = TaskStore::new("postgres://admin:admin@localhost/subtitles")?;
 
     tracing_subscriber::registry()
         .with(
@@ -104,6 +106,7 @@ pub async fn main() -> Result<()> {
         )
         .layer(Extension(s3_client))
         .layer(Extension(connection))
+        .layer(Extension(task_store))
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
@@ -128,12 +131,23 @@ async fn create_rabbitmq_connection() -> Result<Connection> {
 async fn accept_form(
     client: Extension<Client>,
     connection: Extension<Connection>,
+    mut db: Extension<TaskStore>,
     mut multipart: Multipart,
 ) -> Result<Json<SuccessResponse>, AppError> {
-    let task_id = Uuid::new_v4();
+    let task_id: i32 =
+        db.0.new_task(TaskStage::UploadingFile, "Client uploading file")
+            .await
+            .map_err(|x| {
+                AppError::with_details(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create new task",
+                    x.to_string(),
+                )
+            })?;
 
-    let path = format!("temp/{}", task_id.to_string());
-    let mut writer = BufWriter::new(File::create(path.clone()).await.map_err(|e| {
+    let path = format!("temp/{}", task_id);
+
+    let writer = BufWriter::new(File::create(path.clone()).await.map_err(|e| {
         AppError::with_details(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to create temporary file",
@@ -141,6 +155,71 @@ async fn accept_form(
         )
     })?);
 
+    read_multipart(&mut multipart, &path, writer).await?;
+
+    update_stage(
+        &mut db,
+        task_id,
+        TaskStage::TransferingS3,
+        "Uploading to object storage",
+    )
+    .await;
+    info!("File upload complete, transferring to s3");
+    if let Err(err) = upload(client.0, task_id, &path).await {
+        fs::remove_file(&path).await.ok();
+        return Err(AppError::internal_error(err));
+    }
+
+    info!("S3 Transfer complete for {}", task_id);
+    fs::remove_file(&path).await.map_err(|e| {
+        AppError::with_details(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to remove temporary file",
+            e.to_string(),
+        )
+    })?;
+
+    info!("Removed local file... adding to work queue");
+
+    update_stage(
+        &mut db,
+        task_id,
+        TaskStage::FindingWorker,
+        "Uploading to object storage",
+    )
+    .await;
+
+    publish_task(connection.0, task_id)
+        .await
+        .map_err(AppError::internal_error)?;
+
+    info!("Task published successfully");
+
+    Ok(Json(SuccessResponse {
+        task_id: task_id.to_string(),
+        message: "Task submitted successfully".to_string(),
+    }))
+}
+
+async fn update_stage(
+    db: &mut Extension<TaskStore>,
+    task_id: i32,
+    task_stage: TaskStage,
+    context: &str,
+) {
+    if let Err(x) = db
+        .set_task_stage(task_id, task_stage, String::from(context))
+        .await
+    {
+        error!("Failed to update task stage: {}", x);
+    }
+}
+
+async fn read_multipart(
+    multipart: &mut Multipart,
+    path: &String,
+    mut writer: BufWriter<File>,
+) -> Result<(), AppError> {
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
         AppError::with_details(
             StatusCode::BAD_REQUEST,
@@ -151,7 +230,7 @@ async fn accept_form(
         loop {
             match field.chunk().await {
                 Ok(Some(chunk)) => {
-                    writer.write(&chunk.to_vec()).await.map_err(|e| {
+                    writer.write(&chunk).await.map_err(|e| {
                         AppError::with_details(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "Failed to write file chunk",
@@ -183,36 +262,10 @@ async fn accept_form(
         }
     }
     drop(writer);
-
-    info!("File upload complete, transferring to s3");
-    if let Err(err) = upload(client.0, &task_id, &path).await {
-        fs::remove_file(&path).await.ok();
-        return Err(AppError::internal_error(err));
-    }
-
-    info!("S3 Transfer complete for {}", task_id);
-    fs::remove_file(&path).await.map_err(|e| {
-        AppError::with_details(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to remove temporary file",
-            e.to_string(),
-        )
-    })?;
-
-    info!("Removed local file... adding to work queue");
-    publish_task(connection.0, task_id)
-        .await
-        .map_err(AppError::internal_error)?;
-
-    info!("Task published successfully");
-
-    Ok(Json(SuccessResponse {
-        task_id: task_id.to_string(),
-        message: "Task submitted successfully".to_string(),
-    }))
+    Ok(())
 }
 
-async fn publish_task(connection: Connection, item_id: Uuid) -> Result<()> {
+async fn publish_task(connection: Connection, item_id: i32) -> Result<()> {
     let args = BasicPublishArguments::new("", QUEUE_NAME);
 
     // Open a channel
@@ -235,7 +288,7 @@ async fn publish_task(connection: Connection, item_id: Uuid) -> Result<()> {
             BasicProperties::default()
                 .with_delivery_mode(DELIVERY_MODE_PERSISTENT)
                 .finish(), // Persistent message
-            item_id.as_bytes().to_vec(),
+            item_id.to_le_bytes().to_vec(),
             args,
         )
         .await
