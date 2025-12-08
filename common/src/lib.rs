@@ -1,7 +1,9 @@
 use std::fmt;
 use std::str::FromStr;
 use crate::TaskStage::Unknown;
+use serde::Serialize;
 
+#[derive(Serialize)]
 pub struct Segment {
     pub text: String,
     pub start_timestamp: i64,

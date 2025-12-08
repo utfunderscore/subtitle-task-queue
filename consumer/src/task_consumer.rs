@@ -157,8 +157,8 @@ impl AudioConsumer {
         Ok(())
     }
 
-    async fn store_segments(&self, segments: Vec<Segment>) -> Result<()> {
-        todo!()
+    async fn store_segments(&mut self, task_id: i32, segments: Vec<Segment>) -> Result<()> {
+        self.task_store.store_segments(task_id, segments).await
     }
 
     async fn update_stage(db: &mut TaskStore, task_id: i32, task_stage: TaskStage, context: &str) {

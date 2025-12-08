@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use common::Segment;
 use diesel::prelude::*;
 

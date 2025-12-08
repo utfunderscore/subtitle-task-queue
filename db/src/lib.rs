@@ -8,8 +8,9 @@ use common::{Segment, TaskStage};
 use diesel::QueryDsl;
 use diesel::associations::HasTable;
 use diesel::r2d2::ConnectionManager;
-use diesel::{ExpressionMethods, PgConnection, RunQueryDsl, SelectableHelper};
+use diesel::{ExpressionMethods, OptionalExtension, PgConnection, RunQueryDsl, SelectableHelper};
 use r2d2::Pool;
+use std::str::FromStr;
 use tokio::task::spawn_blocking;
 
 pub mod models;
@@ -120,6 +121,33 @@ impl TaskStore {
             .into_iter()
             .map(|x| Segment::new(x.text, x.start_timestamp, x.end_timestamp))
             .collect())
+    }
+
+    pub async fn get_task(&mut self, task_id: i32) -> Result<Option<(TaskStage, String)>> {
+        let pool = self.pg_connection.clone();
+
+        spawn_blocking(move || {
+            let mut conn = pool
+                .get()
+                .context("Failed to acquire database connection from pool")?;
+
+            let result: Option<(String, String)> = task
+                .filter(schema::task::id.eq(task_id))
+                .select((schema::task::stage, schema::task::context))
+                .first(&mut conn)
+                .optional()
+                .context("Failed to get task")?;
+
+            match result {
+                Some((stage_str, context)) => {
+                    let task_stage = TaskStage::from_str(&stage_str).unwrap_or_default();
+                    Ok(Some((task_stage, context)))
+                }
+                None => Ok(None),
+            }
+        })
+        .await
+        .context("Async task execution failed")?
     }
 }
 

@@ -6,12 +6,12 @@ use anyhow::{Context, Result};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::{Client, Config};
-use axum::extract::{DefaultBodyLimit, Multipart};
+use axum::extract::{DefaultBodyLimit, Multipart, Path};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Extension, Json, Router, debug_handler};
-use common::TaskStage;
+use common::{Segment, TaskStage};
 use db::TaskStore;
 use serde::Serialize;
 use tokio::fs;
@@ -19,10 +19,9 @@ use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use uuid::Uuid;
 
 pub mod multipart_upload;
 
@@ -32,6 +31,15 @@ const QUEUE_NAME: &str = "subtitles-work-queue";
 struct SuccessResponse {
     task_id: String,
     message: String,
+}
+
+#[derive(Serialize)]
+struct TaskResponse {
+    task_id: i32,
+    stage: String,
+    context: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    segments: Option<Vec<Segment>>,
 }
 
 #[derive(Serialize)]
@@ -95,6 +103,7 @@ pub async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/", post(accept_form))
+        .route("/task/{id}", get(get_task_status))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             2500 * 1024 * 1024, /* 250mb */
@@ -313,4 +322,48 @@ fn create_s3_client() -> Client {
             .force_path_style(true)
             .build(),
     )
+}
+
+#[debug_handler]
+async fn get_task_status(
+    Path(task_id): Path<i32>,
+    mut db: Extension<TaskStore>,
+) -> Result<Json<TaskResponse>, AppError> {
+    // Get task details
+    let task_info = db
+        .get_task(task_id)
+        .await
+        .map_err(AppError::internal_error)?;
+
+    let (stage, context) = match task_info {
+        Some(info) => info,
+        None => {
+            return Err(AppError {
+                status: StatusCode::NOT_FOUND,
+                message: format!("Task {} not found", task_id),
+                details: None,
+            })
+        }
+    };
+
+    // Convert TaskStage to string for comparison
+    let stage_str = stage.to_string();
+    
+    // Only fetch segments if task is in Success state
+    let segments = if stage_str == "Success" {
+        Some(
+            db.get_segments(task_id)
+                .await
+                .map_err(AppError::internal_error)?,
+        )
+    } else {
+        None
+    };
+
+    Ok(Json(TaskResponse {
+        task_id,
+        stage: stage_str,
+        context,
+        segments,
+    }))
 }
