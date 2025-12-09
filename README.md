@@ -27,20 +27,27 @@ RabbitMQ coordinates work distribution with durable queues and persistent messag
 
 ## Data Flow
 
+**Upload Phase (Producer)**
 1. Client POSTs multipart form data to `/` endpoint
-2. Producer streams upload to local temp file
-3. Producer transfers file to RustFS using multipart upload
-4. Producer writes task record to PostgreSQL
-5. Producer publishes task ID to RabbitMQ queue
-6. Consumer reads task ID from queue
-7. Consumer downloads file from RustFS
-8. Consumer validates media with ffmpeg probe
-9. Consumer converts to WAV format
-10. Consumer runs Whisper inference on converted audio
-11. Consumer writes segments to PostgreSQL
-12. Consumer updates task status to "Success"
-13. Consumer acknowledges message to RabbitMQ
-14. Client GETs `/task/{id}` to retrieve segments
+2. Streams upload to local temp file
+3. Transfers file to RustFS using multipart upload
+4. Writes task record to PostgreSQL
+5. Publishes task ID to RabbitMQ queue
+6. Returns task ID to client
+
+**Processing Phase (Consumer)**
+1. Reads task ID from queue
+2. Downloads file from RustFS
+3. Validates media with ffmpeg probe
+4. Converts to WAV format
+5. Runs Whisper inference on converted audio
+6. Writes segments to PostgreSQL
+7. Updates task status to "Success"
+8. Acknowledges message to RabbitMQ
+
+**Retrieval Phase (Producer)**
+1. Client GETs `/task/{id}` endpoint
+2. Returns task status and segments when complete
 
 ## Technologies
 
